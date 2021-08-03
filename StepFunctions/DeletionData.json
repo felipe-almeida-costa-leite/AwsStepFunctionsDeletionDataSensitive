@@ -1,0 +1,633 @@
+{
+  "Comment": "This is your state machine",
+  "StartAt": "SQS Parameters List",
+  "States": {
+    "SQS Parameters List": {
+      "Type": "Pass",
+      "Parameters": {
+        "Operation": "list"
+      },
+      "Next": "Lambda SQS List Messages"
+    },
+    "Lambda SQS List Messages": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "arn:aws:lambda:us-east-1:CODECOMPANY:function:lambda-sqs-client-deletion-data"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Choice List Message"
+    },
+    "Choice List Message": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Or": [
+            {
+              "Variable": "$.body",
+              "NumericEquals": 0
+            },
+            {
+              "Variable": "$.body",
+              "StringEquals": "False"
+            },
+            {
+              "Variable": "$.body",
+              "BooleanEquals": false
+            }
+          ],
+          "Next": "Pass The End"
+        }
+      ],
+      "Default": "Parallel Create"
+    },
+    "Parallel Create": {
+      "Type": "Parallel",
+      "Next": "Loop Process",
+      "Branches": [
+        {
+          "StartAt": "EMR CreateCluster",
+          "States": {
+            "EMR CreateCluster": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::elasticmapreduce:createCluster",
+              "Parameters": {
+                "Name": "NOMECLUSTER",
+                "VisibleToAllUsers": true,
+                "ServiceRole": "EMR_DefaultRole",
+                "JobFlowRole": "EMR_EC2_DefaultRole",
+                "ReleaseLabel": "emr-6.3.0",
+                "Applications": [
+                  {
+                    "Name": "Hadoop"
+                  },
+                  {
+                    "Name": "Spark"
+                  },
+                  {
+                    "Name": "Hive"
+                  },
+                  {
+                    "Name": "Presto"
+                  },
+                  {
+                    "Name": "Tez"
+                  }
+                ],
+                "LogUri": "s3://EMR-LOGS/",
+                "Instances": {
+                  "KeepJobFlowAliveWhenNoSteps": true,
+                  "InstanceFleets": [
+                    {
+                      "InstanceFleetType": "MASTER",
+                      "Name": "Master",
+                      "TargetOnDemandCapacity": 1,
+                      "InstanceTypeConfigs": [
+                        {
+                          "InstanceType": "m5.xlarge"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "ResultSelector": {
+                "ClusterId.$": "$.ClusterId"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Lambda S3 Create Bucket",
+          "States": {
+            "Lambda S3 Create Bucket": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "Payload.$": "$",
+                "FunctionName": "arn:aws:lambda:us-east-1:CODECOMPANY:function:lambda-s3-client-deletion-data"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 6,
+                  "BackoffRate": 2
+                }
+              ],
+              "ResultSelector": {
+                "status_code.$": "$.Payload.status_code",
+                "messages.$": "$.Payload.body"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.ID",
+      "Parameters": {
+        "Operation": "create_bucket"
+      },
+      "ResultSelector": {
+        "ClusterId.$": "$.[0].ClusterId"
+      }
+    },
+    "Loop Process": {
+      "Type": "Map",
+      "Iterator": {
+        "StartAt": "Wait  SQS Receives Messages",
+        "States": {
+          "Wait  SQS Receives Messages": {
+            "Type": "Wait",
+            "Seconds": 30,
+            "Next": "Lambda SQS Receive Message"
+          },
+          "Lambda SQS Receive Message": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "arn:aws:lambda:us-east-1:CODECOMPANY:function:lambda-sqs-client-deletion-data",
+              "Payload.$": "$"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2
+              }
+            ],
+            "Next": "Parallel Dynamo, S3 and SQS",
+            "InputPath": "$.SQS",
+            "ResultPath": "$.response",
+            "ResultSelector": {
+              "status_code.$": "$.Payload.status_code",
+              "messages.$": "$.Payload.messages"
+            }
+          },
+          "Parallel Dynamo, S3 and SQS": {
+            "Type": "Parallel",
+            "Branches": [
+              {
+                "StartAt": "Lambda DynamoDB Update Status EM PROCESSO",
+                "States": {
+                  "Lambda DynamoDB Update Status EM PROCESSO": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::lambda:invoke",
+                    "Parameters": {
+                      "Payload.$": "$",
+                      "FunctionName": "arn:aws:lambda:us-east-1:CODECOMPANY:function:lambda-dynamo-client-deletion-data"
+                    },
+                    "Retry": [
+                      {
+                        "ErrorEquals": [
+                          "Lambda.ServiceException",
+                          "Lambda.AWSLambdaException",
+                          "Lambda.SdkClientException"
+                        ],
+                        "IntervalSeconds": 2,
+                        "MaxAttempts": 6,
+                        "BackoffRate": 2
+                      }
+                    ],
+                    "End": true,
+                    "InputPath": "$.DynamoDB",
+                    "ResultSelector": {
+                      "status_code.$": "$.Payload.status_code",
+                      "messages.$": "$.Payload.body"
+                    },
+                    "ResultPath": "$.response"
+                  }
+                }
+              },
+              {
+                "StartAt": "Lambda S3 Write Item for JSON File",
+                "States": {
+                  "Lambda S3 Write Item for JSON File": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::lambda:invoke",
+                    "Parameters": {
+                      "Payload.$": "$",
+                      "FunctionName": "arn:aws:lambda:us-east-1:CODECOMPANY:function:lambda-s3-client-deletion-data"
+                    },
+                    "Retry": [
+                      {
+                        "ErrorEquals": [
+                          "Lambda.ServiceException",
+                          "Lambda.AWSLambdaException",
+                          "Lambda.SdkClientException"
+                        ],
+                        "IntervalSeconds": 2,
+                        "MaxAttempts": 6,
+                        "BackoffRate": 2
+                      }
+                    ],
+                    "End": true,
+                    "InputPath": "$.S3",
+                    "ResultSelector": {
+                      "status_code.$": "$.Payload.status_code",
+                      "messages.$": "$.Payload.body"
+                    },
+                    "ResultPath": "$.response"
+                  }
+                }
+              }
+            ],
+            "Next": "EMR AddStep",
+            "Parameters": {
+              "DynamoDB": {
+                "Operation": "updates",
+                "body.$": "$.response.messages.Hashs"
+              },
+              "S3": {
+                "Operation": "put_object",
+                "body": {
+                  "body.$": "$.response.messages.Bodys"
+                }
+              },
+              "SQS": {
+                "Operation": "deletion",
+                "ReceiptHandles.$": "$.response.messages.ReceiptHandles",
+                "ClusterId.$": "$.ClusterId"
+              }
+            },
+            "ResultPath": "$.TaskResult",
+            "OutputPath": "$.TaskResult[0]"
+          },
+          "EMR AddStep": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::elasticmapreduce:addStep.sync",
+            "Parameters": {
+              "ClusterId.$": "$.ClusterId",
+              "Step": {
+                "Name": "DeletionData",
+                "ActionOnFailure": "TERMINATE_CLUSTER",
+                "HadoopJarStep": {
+                  "Jar": "command-runner.jar",
+                  "Args": [
+                    "spark-submit",
+                    "--deploy-mode",
+                    "client",
+                    "--executor-memory",
+                    "12g",
+                    "--driver-memory",
+                    "4g",
+                    "--jars",
+                    "s3://JAR",
+                    "s3://JAR",
+                    "s3://BUCKETDATA/",
+                    "s3://BUCKET_DATA_PII/",
+                    "s3://BUCKETDATA/",
+                    "local[*]"
+                  ]
+                }
+              }
+            },
+            "Next": "Wait Read JSON File",
+            "ResultSelector": {
+              "S3": {
+                "Operation": "get_object"
+              }
+            },
+            "ResultPath": "$.TaskResult",
+            "InputPath": "$.SQS"
+          },
+          "Wait Read JSON File": {
+            "Type": "Wait",
+            "Seconds": 30,
+            "Next": "Lambda S3 Read JSON File"
+          },
+          "Lambda S3 Read JSON File": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "Payload.$": "$",
+              "FunctionName": "arn:aws:lambda:us-east-1:CODECOMPANY:function:lambda-s3-client-deletion-data"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2
+              }
+            ],
+            "Next": "Lambda DynamoDB Update Status SUCESSO or FALHA",
+            "InputPath": "$.TaskResult.S3",
+            "ResultSelector": {
+              "status_code.$": "$.Payload.status_code",
+              "DynamoDB": {
+                "Operation": "updates",
+                "body.$": "$.Payload.body"
+              }
+            },
+            "ResultPath": "$.TaskResult"
+          },
+          "Lambda DynamoDB Update Status SUCESSO or FALHA": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "Payload.$": "$",
+              "FunctionName": "arn:aws:lambda:us-east-1:CODECOMPANY:function:lambda-dynamo-client-deletion-data"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2
+              }
+            ],
+            "InputPath": "$.TaskResult.DynamoDB",
+            "ResultSelector": {
+              "status_code.$": "$.Payload.status_code",
+              "messages.$": "$.Payload.body"
+            },
+            "ResultPath": "$.TaskResult",
+            "Next": "Lambda SQS Delete Message"
+          },
+          "Lambda SQS Delete Message": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "Payload.$": "$",
+              "FunctionName": "arn:aws:lambda:us-east-1:CODECOMPANY:function:lambda-sqs-client-deletion-data"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2
+              }
+            ],
+            "ResultSelector": {
+              "status_code.$": "$.Payload.status_code",
+              "messages.$": "$.Payload.body"
+            },
+            "ResultPath": "$.response",
+            "End": true,
+            "InputPath": "$.SQS"
+          }
+        }
+      },
+      "MaxConcurrency": 1,
+      "ItemsPath": "$.body",
+      "Parameters": {
+        "ClusterId.$": "$.ID.ClusterId",
+        "SQS": {
+          "Operation": "receives"
+        }
+      },
+      "Next": "Choice Erro in Loop",
+      "ResultSelector": {
+        "S3": {
+          "DeleteObject": {
+            "Operation": "delete_objects"
+          }
+        }
+      },
+      "ResultPath": "$.response",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Choice Erro in Loop",
+          "Comment": "Erro to Delete Object"
+        }
+      ]
+    },
+    "Choice Erro in Loop": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.Error",
+          "IsPresent": true,
+          "Next": "Parameters Finishi After Error"
+        }
+      ],
+      "Default": "Lambda S3 Delete Objects in Bucket"
+    },
+    "Parameters Finishi After Error": {
+      "Type": "Pass",
+      "Next": "Lambda S3 Delete Objects in Bucket (1)",
+      "Parameters": {
+        "S3": {
+          "DeleteObject": {
+            "Operation": "delete_objects"
+          }
+        }
+      },
+      "ResultPath": "$.response"
+    },
+    "Lambda S3 Delete Objects in Bucket Error": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "arn:aws:lambda:us-east-1:CODECOMPANY:function:lambda-s3-client-deletion-data"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "InputPath": "$.response.S3.DeleteObject",
+      "ResultSelector": {
+        "status_code.$": "$.Payload.status_code",
+        "messages.$": "$.Payload.body",
+        "S3": {
+          "Operation": "delete_bucket"
+        }
+      },
+      "ResultPath": "$.response",
+      "Next": "Wait Delete Objects Bucket (1)"
+    },
+    "Wait Delete Objects Bucket (1)": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "Lambda S3 Delete Bucket (1)"
+    },
+    "Lambda S3 Delete Bucket (1)": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "arn:aws:lambda:us-east-1:CODECOMPANY:function:lambda-s3-client-deletion-data"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "InputPath": "$.response.S3",
+      "ResultSelector": {
+        "status_code.$": "$.Payload.status_code",
+        "messages.$": "$.Payload.body",
+        "EMR": {
+          "Operation": "get_id"
+        }
+      },
+      "ResultPath": "$.response",
+      "Next": "Lambda EMR Collect ID Cluster"
+    },
+    "Lambda EMR Collect ID Cluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "arn:aws:lambda:us-east-1:CODECOMPANY:function:lambda-emr-client-deletion-data"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultSelector": {
+        "status_code.$": "$.Payload.status_code",
+        "ClusterId.$": "$.Payload.body"
+      },
+      "ResultPath": "$.response",
+      "Next": "EMR TerminateCluster (1)",
+      "InputPath": "$.response.EMR"
+    },
+    "EMR TerminateCluster Error": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::elasticmapreduce:terminateCluster",
+      "Parameters": {
+        "ClusterId.$": "$.response.ClusterId"
+      },
+      "End": true
+    },
+    "Lambda S3 Delete Objects in Bucket": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "arn:aws:lambda:us-east-1:CODECOMPANY:function:lambda-s3-client-deletion-data"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "InputPath": "$.response.S3.DeleteObject",
+      "ResultSelector": {
+        "status_code.$": "$.Payload.status_code",
+        "messages.$": "$.Payload.body",
+        "S3": {
+          "Operation": "delete_bucket"
+        }
+      },
+      "ResultPath": "$.response",
+      "Next": "Wait Delete Objects Bucket"
+    },
+    "Wait Delete Objects Bucket": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "Lambda S3 Delete Bucket"
+    },
+    "Lambda S3 Delete Bucket": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "arn:aws:lambda:us-east-1:CODECOMPANY:function:lambda-s3-client-deletion-data"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "InputPath": "$.response.S3",
+      "ResultSelector": {
+        "status_code.$": "$.Payload.status_code",
+        "messages.$": "$.Payload.body"
+      },
+      "Next": "EMR TerminateCluster",
+      "ResultPath": "$.response"
+    },
+    "EMR TerminateCluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::elasticmapreduce:terminateCluster",
+      "Parameters": {
+        "ClusterId.$": "$.ID.ClusterId"
+      },
+      "End": true
+    },
+    "Pass The End": {
+      "Type": "Pass",
+      "End": true
+    }
+  }
+}
