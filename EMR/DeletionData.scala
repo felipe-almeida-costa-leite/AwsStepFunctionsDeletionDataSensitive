@@ -151,7 +151,6 @@ object Deletion extends Serializable {
         .withColumn("fancy_name", change_value(col("fancy_name")))
         .withColumn("contact_name", change_value(col("contact_name")))
         .withColumn("gender", change_value(col("gender")))
-        .withColumn("inscricao_municipal", change_value(col("inscricao_municipal")))
         .withColumn("address", change_value(col("address")))
         .withColumn("number", change_value(col("number")))
         .withColumn("complement", change_value(col("complement")))
